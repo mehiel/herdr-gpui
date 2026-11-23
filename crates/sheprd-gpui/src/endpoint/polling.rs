@@ -55,6 +55,8 @@ impl SheprdWindow {
         // Record the focused target the user last saw before a newer snapshot
         // can replace it; input held across a gap may only go there.
         self.flush_pending_input(cx);
+        // Before the selection write and the load: both name this session.
+        self.catalog.follow(self.local_session());
         if let Some(error) = self.catalog.poll_write() {
             crate::storage_warning::warn_storage_failure("Save host selection", &error); // i18n: data
             self.local_error = Some(fl!(

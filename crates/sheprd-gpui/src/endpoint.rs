@@ -666,6 +666,12 @@ impl SheprdWindow {
         )
     }
 
+    /// The local session this window is attached to, whose own saved machines
+    /// it lists beside the shared ones; `None` for an explicit socket.
+    pub(crate) fn local_session(&self) -> Option<String> {
+        self.endpoints[0].connection.target.local_session_name()
+    }
+
     /// Attach this window to another named local session. The local endpoint
     /// keeps its identity, so the session changes its target rather than adding
     /// an endpoint for every session on the machine.

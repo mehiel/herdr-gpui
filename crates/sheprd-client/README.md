@@ -463,6 +463,12 @@ adjacent version-1 `endpoint-selection.json`: `None` means Local, otherwise the
 value is an enabled profile's opaque ID. Missing, invalid or stale selection
 retains the validated legacy catalog selection (normally Local). Refresh only
 profiles thereafter so another client's selection cannot hijack the active UI.
+The loaders and `store_saved_host_selection` take the local session
+(`ConnectTarget::local_session_name`): upstream keeps machines saved for one
+session in `client/sessions/<name>/endpoints.json`, same schema and limits, and
+they follow the shared profiles; a profile ID repeated across the two files is
+refused. `None` reads the shared catalog alone, and the shared file is never
+written with session machines.
 `store_saved_host_selection` validates against the current catalog and writes
 only selection using a create-new 0600 temporary file, file sync, atomic rename,
 and parent-directory sync. Non-file/symlink destinations are refused; failures

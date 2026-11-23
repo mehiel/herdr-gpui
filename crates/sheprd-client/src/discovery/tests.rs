@@ -156,4 +156,54 @@ fn sessions_are_contained_and_default_is_not_nested() {
         PathBuf::from("/tmp/explicit.sock")
     );
 }
+
+#[test]
+fn local_session_name_follows_the_attached_session() {
+    let named = |value: Option<&'static str>| {
+        move |name: &str| {
+            (name == "HERDR_SESSION")
+                .then_some(value)
+                .flatten()
+                .map(OsString::from)
+        }
+    };
+    let session = ConnectTarget::Session {
+        name: "factory".into(),
+        development: false,
+    };
+    assert_eq!(
+        session
+            .local_session_name_with(named(Some("other")))
+            .as_deref(),
+        Some("factory")
+    );
+    let local = ConnectTarget::Local;
+    assert_eq!(
+        local
+            .local_session_name_with(named(Some("horizon")))
+            .as_deref(),
+        Some("horizon")
+    );
+    assert_eq!(
+        local.local_session_name_with(named(None)).as_deref(),
+        Some("default")
+    );
+    // Upstream falls back to the default session for a name it would refuse.
+    assert_eq!(
+        local
+            .local_session_name_with(named(Some("../x")))
+            .as_deref(),
+        Some("default")
+    );
+    for target in [
+        ConnectTarget::Socket("/run/herdr.sock".into()),
+        ConnectTarget::Ssh {
+            target: "xps".into(),
+            session: "factory".into(),
+        },
+    ] {
+        assert_eq!(target.local_session_name_with(named(Some("factory"))), None);
+    }
+}
+
 mod saved_targets;

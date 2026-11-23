@@ -2,6 +2,7 @@
 use super::*;
 
 mod save;
+mod session_scope;
 use serde_json::json;
 
 // Symlink and permission fixtures require POSIX semantics.
@@ -77,7 +78,7 @@ fn storage_errors_retain_operation_paths_sources_and_redacted_display() {
     fs::write(&catalog, br#"{"version":1}"#).unwrap();
     fs::remove_file(&selection).unwrap();
     std::os::unix::fs::symlink(&catalog, &selection).unwrap();
-    let error = store_selection(&catalog, None).unwrap_err();
+    let error = store_selection(&catalog, None, None).unwrap_err();
     assert!(
         matches!(&error, Error::Storage { operation: StorageOperation::Validate, path, source }
         if path == &selection && matches!(source.as_ref(), Error::StorageDestinationNotFile))
@@ -130,21 +131,21 @@ fn selection_roundtrip_fallbacks_and_independent_clients() {
     let id = "0123456789abcdef0123456789abcdef";
     let catalog = json!({"version":1,"ssh":[{"id":id,"label":"Build","target":"build","session":"default","enabled":true}]});
     fs::write(&path, catalog.to_string()).unwrap();
-    assert_eq!(load_with_selection(&path).unwrap().1, None);
-    store_selection(&path, Some(id)).unwrap();
-    let first_client = load_with_selection(&path).unwrap();
+    assert_eq!(load_with_selection(&path, None).unwrap().1, None);
+    store_selection(&path, None, Some(id)).unwrap();
+    let first_client = load_with_selection(&path, None).unwrap();
     assert_eq!(first_client.1.as_deref(), Some(id));
     assert_eq!(
         fs::metadata(&selection).unwrap().permissions().mode() & 0o777,
         0o600
     );
-    store_selection(&path, None).unwrap();
-    assert_eq!(load_with_selection(&path).unwrap().1, None);
+    store_selection(&path, None, None).unwrap();
+    assert_eq!(load_with_selection(&path, None).unwrap().1, None);
     assert_eq!(first_client.1.as_deref(), Some(id));
     assert_eq!(load_path(&path).unwrap(), first_client.0);
     assert_eq!(fs::read_to_string(&path).unwrap(), catalog.to_string());
     let before = fs::read(&selection).unwrap();
-    assert!(store_selection(&path, Some("missing")).is_err());
+    assert!(store_selection(&path, None, Some("missing")).is_err());
     assert_eq!(fs::read(&selection).unwrap(), before);
     for bad in [
         "not json".into(),
@@ -154,27 +155,33 @@ fn selection_roundtrip_fallbacks_and_independent_clients() {
         " ".repeat(65537),
     ] {
         fs::write(&selection, bad).unwrap();
-        let (hosts, selected) = load_with_selection(&path).unwrap();
+        let (hosts, selected) = load_with_selection(&path, None).unwrap();
         assert_eq!(hosts.len(), 1);
         assert_eq!(selected, None);
     }
-    store_selection(&path, Some(id)).unwrap();
+    store_selection(&path, None, Some(id)).unwrap();
     let mut disabled = catalog.clone();
     disabled["ssh"][0]["enabled"] = json!(false);
     fs::write(&path, disabled.to_string()).unwrap();
-    assert_eq!(load_with_selection(&path).unwrap().1, None);
-    assert!(store_selection(&path, Some(id)).is_err());
+    assert_eq!(load_with_selection(&path, None).unwrap().1, None);
+    assert!(store_selection(&path, None, Some(id)).is_err());
     fs::write(&path, json!({"version":1}).to_string()).unwrap();
-    assert_eq!(load_with_selection(&path).unwrap().1, None);
+    assert_eq!(load_with_selection(&path, None).unwrap().1, None);
     let mut legacy = catalog;
     legacy["selected_profile"] = json!(id);
     fs::write(&path, legacy.to_string()).unwrap();
     fs::remove_file(&selection).unwrap();
-    assert_eq!(load_with_selection(&path).unwrap().1.as_deref(), Some(id));
+    assert_eq!(
+        load_with_selection(&path, None).unwrap().1.as_deref(),
+        Some(id)
+    );
     fs::write(&selection, "bad").unwrap();
-    assert_eq!(load_with_selection(&path).unwrap().1.as_deref(), Some(id));
-    store_selection(&path, None).unwrap();
-    assert_eq!(load_with_selection(&path).unwrap().1, None);
+    assert_eq!(
+        load_with_selection(&path, None).unwrap().1.as_deref(),
+        Some(id)
+    );
+    store_selection(&path, None, None).unwrap();
+    assert_eq!(load_with_selection(&path, None).unwrap().1, None);
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -189,13 +196,13 @@ fn selection_write_refuses_nonfiles_without_touching_other_state() {
     let other = root.join("other");
     fs::write(&other, "untouched").unwrap();
     std::os::unix::fs::symlink(&other, &selection).unwrap();
-    assert!(store_selection(&catalog, None).is_err());
+    assert!(store_selection(&catalog, None, None).is_err());
     assert_eq!(fs::read_to_string(&other).unwrap(), "untouched");
     fs::remove_file(&selection).unwrap();
     fs::create_dir(&selection).unwrap();
-    assert!(store_selection(&catalog, None).is_err());
+    assert!(store_selection(&catalog, None, None).is_err());
     assert_eq!(fs::read_dir(&root).unwrap().count(), 2);
-    assert!(store_selection(&other.join("endpoints.json"), None).is_err());
+    assert!(store_selection(&other.join("endpoints.json"), None, None).is_err());
     fs::remove_dir_all(root).unwrap();
 }
 #[test]

@@ -120,17 +120,34 @@ pub(super) fn claim_saved(target: &str, session: &str) -> Result<Claim> {
 
 /// Forget a saved device with `herdr machine remove`. The CLI only edits the
 /// local catalog; it never connects, so the host's own Herdr keeps running.
-/// Blocks on a process: call it from the background executor.
-pub(crate) fn remove(id: &str) -> Result<()> {
-    remove_with(crate::daemon::executable().as_os_str(), id)
+/// `session` is the window's local session, so a machine saved for that
+/// session only is found. Blocks on a process: call it from the background
+/// executor.
+pub(crate) fn remove(id: &str, session: Option<&str>) -> Result<()> {
+    remove_with(crate::daemon::executable().as_os_str(), id, session)
 }
 
-fn remove_with(executable: &std::ffi::OsStr, id: &str) -> Result<()> {
+/// `herdr` arguments that run a `machine` subcommand in `session`, whose own
+/// saved machines Herdr loads beside the shared ones.
+fn in_session<'a>(session: Option<&'a str>, args: &[&'a str]) -> Vec<&'a str> {
+    session
+        .map(|name| ["--session", name])
+        .into_iter()
+        .flatten()
+        .chain(args.iter().copied())
+        .collect()
+}
+
+fn remove_with(executable: &std::ffi::OsStr, id: &str, session: Option<&str>) -> Result<()> {
     if !sheprd_client::valid_profile_id(id) {
         tracing::warn!(category = "device_remove", "Invalid profile ID");
         return Err(Error::NoProfile.into());
     }
-    let (status, _, stderr) = run_cli(executable, &["machine", "remove", id], REMOVE_TIMEOUT)?;
+    let (status, _, stderr) = run_cli(
+        executable,
+        &in_session(session, &["machine", "remove", id]),
+        REMOVE_TIMEOUT,
+    )?;
     if status.success() {
         return Ok(());
     }
@@ -142,19 +159,26 @@ fn remove_with(executable: &std::ffi::OsStr, id: &str) -> Result<()> {
 }
 
 /// Rename a saved device with `herdr machine rename`, which edits only the
-/// local catalog. Blocks on a process: call it from the background executor.
-pub(super) fn rename(id: &str, label: &str) -> Result<()> {
-    rename_with(crate::daemon::executable().as_os_str(), id, label)
+/// local catalog, in `session` as `remove` does. Blocks on a process: call it
+/// from the background executor.
+pub(super) fn rename(id: &str, label: &str, session: Option<&str>) -> Result<()> {
+    rename_with(crate::daemon::executable().as_os_str(), id, label, session)
 }
 
-fn rename_with(executable: &std::ffi::OsStr, id: &str, label: &str) -> Result<()> {
+fn rename_with(
+    executable: &std::ffi::OsStr,
+    id: &str,
+    label: &str,
+    session: Option<&str>,
+) -> Result<()> {
     if !sheprd_client::valid_profile_id(id) {
         return Err(Error::NoProfile.into());
     }
     // The `=` form keeps a label that starts with `-` from reading as a flag.
+    let label = format!("--label={label}");
     let (status, _, stderr) = run_cli(
         executable,
-        &["machine", "rename", id, &format!("--label={label}")],
+        &in_session(session, &["machine", "rename", id, &label]),
         REMOVE_TIMEOUT,
     )?;
     if status.success() {
@@ -175,7 +199,7 @@ pub(super) fn verify_unsaved(request: &Request, claim: &Claim) -> Result<()> {
 /// Device setup is refused for development catalogs, so this is the catalog
 /// `machine add` writes: the terminal command restores the same state root.
 fn load_catalog() -> Result<Vec<SavedHost>> {
-    let hosts = sheprd_client::load_saved_hosts(false)?;
+    let hosts = sheprd_client::load_saved_hosts(false, None)?;
     for host in &hosts {
         tracing::debug!(
             category = "device_catalog",
@@ -520,7 +544,8 @@ fn save_with(
                 first = first.id,
                 "Another client saved this host first; removing ours"
             );
-            remove_with(executable, &id)?;
+            // `machine add` saved it for every session.
+            remove_with(executable, &id, None)?;
             Err(Error::Exists(first.label.clone()).into())
         }
         _ => Ok(()),
