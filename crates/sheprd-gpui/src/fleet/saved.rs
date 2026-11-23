@@ -176,10 +176,11 @@ fn keep_blocking(wanted: &[SavedHost]) -> crate::Result<Option<Unsaved>> {
     let before: BTreeSet<String> = crate::state_file::read(&file, MAX_FILE)?
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or_default();
-    let saved = sheprd_client::load_saved_hosts(false)?;
+    // Fleet devices live in the shared catalog, never one session's.
+    let saved = sheprd_client::load_saved_hosts(false, None)?;
     let mut plan = plan(&before, &saved, wanted);
     for id in &plan.forget {
-        if let Err(error) = crate::menu::devices::setup::remove(id) {
+        if let Err(error) = crate::menu::devices::setup::remove(id, None) {
             tracing::warn!(%error, "Could not forget a fleet host");
             // Tried again on the next change.
             plan.kept.insert(id.clone());

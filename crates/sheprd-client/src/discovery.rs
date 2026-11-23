@@ -226,6 +226,27 @@ impl ConnectTarget {
         }
     }
 
+    /// The local session this target attaches to, as upstream names it for
+    /// machines saved for one session: the named session, or for `Local`
+    /// `HERDR_SESSION` when valid and `default` otherwise. `None` for an
+    /// explicit socket or a remote target, which name no local session.
+    pub fn local_session_name(&self) -> Option<String> {
+        self.local_session_name_with(local_var)
+    }
+
+    fn local_session_name_with(&self, var: impl Fn(&str) -> Option<OsString>) -> Option<String> {
+        match self {
+            Self::Session { name, .. } => valid_session_name(name).then(|| name.clone()),
+            Self::Local => Some(
+                var("HERDR_SESSION")
+                    .and_then(|name| name.into_string().ok())
+                    .filter(|name| valid_session_name(name))
+                    .unwrap_or_else(|| "default".into()),
+            ),
+            _ => None,
+        }
+    }
+
     pub fn socket_path(&self) -> Result<PathBuf> {
         self.socket_path_with(local_var)
     }

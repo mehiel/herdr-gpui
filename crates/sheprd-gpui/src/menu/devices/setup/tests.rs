@@ -236,13 +236,19 @@ fn rename_passes_the_label_as_one_value_even_when_it_looks_like_a_flag() -> Resu
         0o700,
     )?;
     let id = "0123456789abcdef0123456789abcdef";
-    rename_with(binary.as_os_str(), id, "--work = box")?;
+    rename_with(binary.as_os_str(), id, "--work = box", None)?;
     assert_eq!(
         std::fs::read_to_string(&log)?,
         format!("machine|rename|{id}|--label=--work = box|")
     );
+    // A machine saved for the window's session is renamed in that session.
+    rename_with(binary.as_os_str(), id, "box", Some("factory"))?;
+    assert_eq!(
+        std::fs::read_to_string(&log)?,
+        format!("--session|factory|machine|rename|{id}|--label=box|")
+    );
     assert!(matches!(
-        rename_with(binary.as_os_str(), "../x", "x"),
+        rename_with(binary.as_os_str(), "../x", "x", None),
         Err(crate::Error::Devices(Error::NoProfile))
     ));
     std::fs::remove_dir_all(&root)?;

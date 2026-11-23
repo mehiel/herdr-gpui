@@ -335,6 +335,7 @@ impl SheprdWindow {
     /// Rename in the background and close once the catalog has the new name;
     /// the sidebar and picker pick it up from there.
     fn submit_rename_device(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let session = self.local_session();
         let Some(host) = &mut self.menu.host else {
             return;
         };
@@ -357,7 +358,7 @@ impl SheprdWindow {
         host.error = None;
         let background = cx
             .background_executor()
-            .spawn(async move { rename(&saved, &label) });
+            .spawn(async move { rename(&saved, &label, session.as_deref()) });
         cx.spawn_in(window, async move |this, cx| {
             let result = background.await;
             let _ = this.update_in(cx, |this, window, cx| {
@@ -423,6 +424,7 @@ impl SheprdWindow {
             ..
         } = host;
         tracing::info!(category = "device_remove", id, "Removing device");
+        let local_session = self.local_session();
         // The outer result is the removal itself; the inner one, the GitHub
         // credential that only matters once the device is gone.
         let background = cx.background_executor().spawn(async move {
@@ -431,7 +433,7 @@ impl SheprdWindow {
                 Saved::Local => Ok(Ok(())),
                 Saved::Ssh { profile } => {
                     let _claim = setup::claim_saved(&target, &session)?;
-                    setup::remove(&profile)?;
+                    setup::remove(&profile, local_session.as_deref())?;
                     Ok::<_, crate::Error>(match Account::host(&profile).filter(|_| forget) {
                         Some(account) => crate::github::forget(store, &account).map_err(Into::into),
                         None => Ok(()),
@@ -828,11 +830,11 @@ impl SheprdWindow {
 
 /// Rename the saved entry: through `herdr machine rename` for an SSH profile,
 /// in the GUI's own list for a cloud device. Blocks; run on a worker.
-fn rename(saved: &Saved, label: &str) -> crate::Result<()> {
+fn rename(saved: &Saved, label: &str, session: Option<&str>) -> crate::Result<()> {
     match saved {
         // Offers no Rename.
         Saved::Local => Ok(()),
-        Saved::Ssh { profile } => setup::rename(profile, label),
+        Saved::Ssh { profile } => setup::rename(profile, label, session),
         #[cfg(feature = "cloud")]
         Saved::Cloud { provider, id } => Ok(crate::cloud::rename(*provider, id, label)?),
     }

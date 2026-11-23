@@ -19,7 +19,7 @@ fn saves_a_device_without_changing_existing_profiles_or_selection() {
     let mut catalog = load_catalog(&path).unwrap();
     catalog.selected_profile = Some(first.id.clone());
     fs::write(&path, serde_json::to_vec(&catalog).unwrap()).unwrap();
-    store_selection(&path, Some(&first.id)).unwrap();
+    store_selection(&path, None, Some(&first.id)).unwrap();
     let selection_path = path.with_file_name("endpoint-selection.json");
     let selection = fs::read(&selection_path).unwrap();
 
