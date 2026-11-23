@@ -208,6 +208,10 @@ Agents aggregates all connected endpoints with host labels. The catalog is read
 through `sheprd-client` every two seconds; changes to targets, sessions, enablement,
 and ordering are reflected without restarting. Catalog errors preserve the last
 valid list. Saved-host edits and remote provisioning are delegated to Herdr's CLI.
+Machines saved for one local session (`herdr machine add --scope session`) follow
+the shared ones while the window is attached to that session: attaching to another
+local session shows that session's machines instead, at once. Rename and remove
+run Herdr's CLI with `--session` naming the window's session, so they find them.
 An explicit `--socket` is isolated: it never loads or connects saved hosts, or
 reads/writes saved selection. Other launches read `client/endpoint-selection.json`
 once, under the same release/dev state root as the catalog. Local remains usable

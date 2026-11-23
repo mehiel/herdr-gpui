@@ -14,6 +14,9 @@ use std::{
 
 pub(crate) struct Catalog {
     development: Option<bool>,
+    /// The local session the window is attached to, whose own saved machines
+    /// upstream lists after the shared ones; `None` reads the shared ones only.
+    session: Option<String>,
     pending: Option<mpsc::Receiver<Result<CatalogUpdate>>>,
     next_poll: Instant,
     /// The endpoint ID to restore, or `None` for Local.
@@ -68,7 +71,7 @@ fn cloud_devices() -> Option<Vec<crate::cloud::SavedDevice>> {
         .ok()
 }
 
-fn load(development: bool, startup: bool) -> Result<CatalogUpdate> {
+fn load(development: bool, session: Option<&str>, startup: bool) -> Result<CatalogUpdate> {
     // Only Windows has distributions; elsewhere the file is never read.
     let wsl = if cfg!(windows) {
         sheprd_client::load_wsl_hosts(development)?
@@ -77,14 +80,14 @@ fn load(development: bool, startup: bool) -> Result<CatalogUpdate> {
     };
     if !startup {
         return Ok(CatalogUpdate {
-            hosts: sheprd_client::load_saved_hosts(development)?,
+            hosts: sheprd_client::load_saved_hosts(development, session)?,
             wsl: wsl.hosts,
             selection: None,
             #[cfg(feature = "cloud")]
             cloud: cloud_devices(),
         });
     }
-    let (hosts, selected) = sheprd_client::load_saved_host_selection(development)?;
+    let (hosts, selected) = sheprd_client::load_saved_host_selection(development, session)?;
     let selection = match wsl.selected_host() {
         Some(host) => Some(format!("{WSL_PREFIX}{}", host.distro)),
         None => selected.map(|id| format!("{SAVED_PREFIX}{id}")),
@@ -100,10 +103,10 @@ fn load(development: bool, startup: bool) -> Result<CatalogUpdate> {
 
 /// Persist the choice of `selected`, an endpoint ID or `None` for Local, to
 /// whichever store can name it, clearing the other.
-fn store(development: bool, selected: Option<&str>) -> Result<()> {
+fn store(development: bool, session: Option<&str>, selected: Option<&str>) -> Result<()> {
     let profile = selected.and_then(|id| id.strip_prefix(SAVED_PREFIX));
     let distro = selected.and_then(|id| id.strip_prefix(WSL_PREFIX));
-    sheprd_client::store_saved_host_selection(development, profile)?;
+    sheprd_client::store_saved_host_selection(development, session, profile)?;
     sheprd_client::store_wsl_selection(development, distro)?;
     Ok(())
 }
@@ -116,6 +119,7 @@ impl Catalog {
                 ConnectTarget::Session { development, .. } => Some(*development),
                 _ => Some(false),
             },
+            session: target.local_session_name(),
             pending: None,
             next_poll: Instant::now(),
             desired: None,
@@ -125,6 +129,18 @@ impl Catalog {
             writing: None,
             last_failure: None,
         }
+    }
+
+    /// Follow the window's local endpoint to another local session: its saved
+    /// machines replace the previous session's at once, and a load still
+    /// reading the previous session's catalog is dropped unseen.
+    pub(super) fn follow(&mut self, session: Option<String>) {
+        if session == self.session {
+            return;
+        }
+        self.session = session;
+        self.pending = None;
+        self.next_poll = Instant::now();
     }
 
     pub(super) fn poll(&mut self) -> Option<Result<CatalogUpdate>> {
@@ -141,10 +157,11 @@ impl Catalog {
             let (tx, rx) = mpsc::sync_channel(1);
             self.pending = Some(rx);
             let startup = !self.initialized;
+            let session = self.session.clone();
             if let Err(error) = std::thread::Builder::new()
                 .name("herdr-gui-catalog".into())
                 .spawn(move || {
-                    let _ = tx.send(load(development, startup));
+                    let _ = tx.send(load(development, session.as_deref(), startup));
                 })
             {
                 self.pending = None;
@@ -208,10 +225,11 @@ impl Catalog {
             && let Some(selected) = self.queued_write.take()
         {
             let (tx, rx) = mpsc::sync_channel(1);
+            let session = self.session.clone();
             match std::thread::Builder::new()
                 .name("herdr-gui-selection".into())
                 .spawn(move || {
-                    let _ = tx.send(store(development, selected.as_deref()));
+                    let _ = tx.send(store(development, session.as_deref(), selected.as_deref()));
                 }) {
                 Ok(_) => self.writing = Some(rx),
                 Err(e) => error = Some(e.into()),

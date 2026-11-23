@@ -1,5 +1,5 @@
 //! Upstream client/endpoint/catalog.rs schema and config/io.rs paths.
-use crate::{Error, Result, StorageOperation, session_socket, ssh};
+use crate::{Error, Result, StorageOperation, discovery::valid_session_name, session_socket, ssh};
 use serde::{Deserialize, Serialize};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
@@ -34,9 +34,48 @@ struct Catalog {
 }
 
 /// Load profiles only, like upstream `load_profiles`; selection is client-local.
+/// `session` names the local session whose own machines follow the shared
+/// ones, as upstream lists them; `None` reads the shared catalog alone.
 /// This performs bounded filesystem I/O; call it from a background task.
-pub fn load_saved_hosts(development: bool) -> Result<Vec<SavedHost>> {
-    load_path(&catalog_path(development, |name| env::var_os(name)))
+pub fn load_saved_hosts(development: bool, session: Option<&str>) -> Result<Vec<SavedHost>> {
+    load_merged(
+        &catalog_path(development, |name| env::var_os(name)),
+        session,
+    )
+    .map(|catalog| catalog.ssh)
+}
+
+/// Upstream's catalog of the machines saved for one local session only, beside
+/// the shared one. `None` for a name that could escape the sessions directory.
+pub(crate) fn session_catalog_path(catalog: &Path, session: &str) -> Option<PathBuf> {
+    valid_session_name(session).then(|| {
+        catalog
+            .with_file_name("sessions")
+            .join(session)
+            .join("endpoints.json")
+    })
+}
+
+/// The shared catalog followed by `session`'s own machines, which upstream
+/// writes to a file of their own so the shared file keeps its format. Only the
+/// shared file's selection counts: upstream never writes one for a session.
+fn load_merged(path: &Path, session: Option<&str>) -> Result<Catalog> {
+    let mut catalog = load_catalog(path)?;
+    let Some(session_path) = session.and_then(|name| session_catalog_path(path, name)) else {
+        return Ok(catalog);
+    };
+    for host in load_catalog(&session_path)?.ssh {
+        // Endpoint IDs derive from profile IDs, so they must stay unique.
+        if catalog.ssh.iter().any(|saved| saved.id == host.id) {
+            return Err(Error::storage(
+                StorageOperation::Validate,
+                &session_path,
+                Error::ProfileId,
+            ));
+        }
+        catalog.ssh.push(host);
+    }
+    Ok(catalog)
 }
 
 /// Save a profile without provisioning or restarting its remote daemon. Returns
@@ -81,12 +120,21 @@ struct Selection {
 /// Load the startup catalog and desired profile (None means Local). Missing,
 /// malformed or stale selection files retain the catalog's legacy selection.
 /// Live clients should subsequently use `load_saved_hosts`, not reload selection.
-pub fn load_saved_host_selection(development: bool) -> Result<(Vec<SavedHost>, Option<String>)> {
-    load_with_selection(&catalog_path(development, |name| env::var_os(name)))
+pub fn load_saved_host_selection(
+    development: bool,
+    session: Option<&str>,
+) -> Result<(Vec<SavedHost>, Option<String>)> {
+    load_with_selection(
+        &catalog_path(development, |name| env::var_os(name)),
+        session,
+    )
 }
 
-fn load_with_selection(path: &Path) -> Result<(Vec<SavedHost>, Option<String>)> {
-    let catalog = load_catalog(path)?;
+fn load_with_selection(
+    path: &Path,
+    session: Option<&str>,
+) -> Result<(Vec<SavedHost>, Option<String>)> {
+    let catalog = load_merged(path, session)?;
     let mut selected = catalog.selected_profile;
     // Selection errors must never discard an otherwise valid catalog.
     if let Ok(Some(selection)) = read_selection(&path.with_file_name("endpoint-selection.json"))
@@ -150,15 +198,21 @@ fn read_selection(path: &Path) -> Result<Option<Selection>> {
 /// Persist an explicit choice without rewriting profiles. Validates against the
 /// current catalog, atomically replaces a private file, and syncs its directory.
 /// All selection APIs perform filesystem I/O and belong on a background worker.
-pub fn store_saved_host_selection(development: bool, selected: Option<&str>) -> Result<()> {
+/// `session` names the local session whose own machines may be selected too.
+pub fn store_saved_host_selection(
+    development: bool,
+    session: Option<&str>,
+    selected: Option<&str>,
+) -> Result<()> {
     store_selection(
         &catalog_path(development, |name| env::var_os(name)),
+        session,
         selected,
     )
 }
 
-fn store_selection(catalog: &Path, selected: Option<&str>) -> Result<()> {
-    let hosts = load_path(catalog)?;
+fn store_selection(catalog: &Path, session: Option<&str>, selected: Option<&str>) -> Result<()> {
+    let hosts = load_merged(catalog, session)?.ssh;
     if selected.is_some_and(|id| !hosts.iter().any(|host| host.enabled && host.id == id)) {
         return Err(Error::storage(
             StorageOperation::Validate,
@@ -271,6 +325,7 @@ pub(crate) fn catalog_path(development: bool, var: impl Fn(&str) -> Option<OsStr
         .join("client/endpoints.json")
 }
 
+#[cfg(test)]
 fn load_path(path: &Path) -> Result<Vec<SavedHost>> {
     load_catalog(path).map(|catalog| catalog.ssh)
 }
