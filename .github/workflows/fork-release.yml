@@ -1,0 +1,178 @@
+name: Fork release
+
+# mehiel/herdr-gpui only: keep the `fork` branch (upstream main + our commits) on top of sheprd-labs/sheprd main, build
+# the Linux packages the way upstream's release.yml does, and publish them as this fork's latest release. Nodes install
+# its Sheprd-<version>-<target>.pkg.tar.zst (Arch), .deb, .rpm or .tar.gz. A rebase conflict fails the run: our commits
+# then need a hand-made rebase.
+#
+# Fork builds carry no HERDR_UPDATE_PUBLIC_KEY, so their in-app updater stays off and never swaps in upstream's build.
+# Versions are YYYYMMDD.N like upstream's (its packaging requires that form), counted on this fork's own fork-v* tags.
+#
+# Needs the secret FORK_SYNC_TOKEN: a token that may push to this repo including workflow files (classic `repo` +
+# `workflow`, or fine-grained Contents + Workflows write). GITHUB_TOKEN cannot push a rebase that carries upstream's own
+# workflow changes.
+
+on:
+  schedule:
+    - cron: "47 4 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: build and release even when upstream has not moved
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fork-release
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  sync:
+    if: github.repository == 'mehiel/herdr-gpui'
+    runs-on: ubuntu-24.04
+    outputs:
+      changed: ${{ steps.rebase.outputs.changed }}
+      sha: ${{ steps.rebase.outputs.sha }}
+      upstream: ${{ steps.rebase.outputs.upstream }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: fork
+          fetch-depth: 0
+          # Without the secret the run still builds, but a rebase that carries upstream workflow changes cannot be pushed.
+          token: ${{ secrets.FORK_SYNC_TOKEN || github.token }}
+
+      - name: Rebase onto upstream main
+        id: rebase
+        env:
+          FORCE: ${{ inputs.force || 'false' }}
+        run: |
+          set -euo pipefail
+          git config user.name "fork-release"
+          git config user.email "fork-release@users.noreply.github.com"
+          git remote add upstream https://github.com/sheprd-labs/sheprd.git
+          git fetch --no-tags upstream main
+          upstream=$(git rev-parse upstream/main)
+          echo "upstream=$upstream" >> "$GITHUB_OUTPUT"
+          if git merge-base --is-ancestor "$upstream" HEAD && [ "$FORCE" != "true" ]; then
+            echo "fork already sits on upstream $upstream"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! git merge-base --is-ancestor "$upstream" HEAD; then
+            if ! git rebase "$upstream"; then
+              git rebase --abort
+              echo "::error::our commits no longer apply on upstream $upstream; rebase the fork branch by hand"
+              exit 1
+            fi
+            git push --force-with-lease origin HEAD:fork
+          fi
+          # main mirrors upstream, so the fork's own commits stay readable as main..fork.
+          git push origin "$upstream:refs/heads/main" || echo "::warning::main did not fast-forward to upstream"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Pick the version
+        id: version
+        if: steps.rebase.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          today=$(date -u +%Y%m%d)
+          last=$(gh api --paginate "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/fork-v$today." --jq '.[].ref' |
+            sed -n "s|^refs/tags/fork-v$today\.\([0-9]*\)$|\1|p" | sort -n | tail -1)
+          echo "version=$today.$(( ${last:-0} + 1 ))" >> "$GITHUB_OUTPUT"
+
+  linux:
+    name: Linux (${{ matrix.target }})
+    needs: sync
+    if: needs.sync.outputs.changed == 'true'
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.sync.outputs.version }}
+      TARGET: ${{ matrix.target }}
+      HERDR_RELEASE_VERSION: ${{ needs.sync.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.sync.outputs.sha }}
+          persist-credentials: false
+      - name: Install GPUI build dependencies
+        run: bash scripts/install-linux-deps.sh
+      - run: rustup show
+      - name: Require the declared native target
+        run: |
+          test "$(rustc -vV | sed -n 's/^host: //p')" = "$TARGET"
+      - run: cargo build --locked --release -p sheprd-gpui -p sheprd-acp -p sheprd-remote-control -p sheprd-automate -p sheprd-nearby --target "$TARGET"
+      - run: python3 scripts/release/fetch-herdr-core.py "$TARGET" "target/$TARGET/release"
+      - run: python3 scripts/release/smoke-cli.py "target/$TARGET/release/sheprd"
+      - name: Install the notice generator
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-about@0.9.2
+          fallback: none
+      - run: python3 scripts/release/generate-notices.py "target/$TARGET/release/THIRD-PARTY-NOTICES.txt"
+      - name: Package Linux executable
+        run: |
+          mkdir dist
+          bash scripts/release/package-linux.sh "$VERSION" "$TARGET" "target/$TARGET/release/sheprd" dist "target/$TARGET/release/THIRD-PARTY-NOTICES.txt"
+      - name: Package distribution formats from the archive
+        run: |
+          nfpm=$(bash scripts/release/install-nfpm.sh "$RUNNER_TEMP/nfpm")
+          python3 scripts/release/package-linux-distro.py "$VERSION" "$TARGET" \
+            "dist/Sheprd-$VERSION-$TARGET.tar.gz" dist --nfpm "$nfpm"
+      - name: Install each package on its distribution and check its libraries
+        run: bash scripts/release/smoke-linux-packages.sh "$VERSION" "$TARGET" dist
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-${{ matrix.target }}
+          path: |
+            dist/Sheprd-${{ needs.sync.outputs.version }}-${{ matrix.target }}.tar.gz
+            dist/Sheprd-${{ needs.sync.outputs.version }}-${{ matrix.target }}.deb
+            dist/Sheprd-${{ needs.sync.outputs.version }}-${{ matrix.target }}.rpm
+            dist/Sheprd-${{ needs.sync.outputs.version }}-${{ matrix.target }}.pkg.tar.zst
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    needs: [sync, linux]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.sync.outputs.sha }}
+          UPSTREAM: ${{ needs.sync.outputs.upstream }}
+          VERSION: ${{ needs.sync.outputs.version }}
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum Sheprd-* > SHA256SUMS
+          gh release create "fork-v$VERSION" --repo "$GITHUB_REPOSITORY" --target "$SHA" --latest \
+            --title "Sheprd $VERSION fork (${SHA:0:7})" \
+            --notes "sheprd-labs/sheprd main ${UPSTREAM:0:9} plus this fork's commits (git log ${UPSTREAM:0:9}..${SHA:0:9}). Arch: \`pacman -U Sheprd-$VERSION-x86_64-unknown-linux-gnu.pkg.tar.zst\` (package herdr-gpui, replaces upstream's). The in-app updater is off in fork builds." \
+            Sheprd-* SHA256SUMS
