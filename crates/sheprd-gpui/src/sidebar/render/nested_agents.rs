@@ -89,9 +89,9 @@ impl SheprdWindow {
             };
             let gap = self.agent_row_gap(rows.len());
             let pane = agent.id();
-            let agent_focused = agent.focused();
+            let agent_focused = self.agent_in_use(index, &agent);
             let row = self.agent_cell(index, agent, &row_cx, lines, gap, true, cx);
-            if !(selected && agent_focused) {
+            if !agent_focused {
                 rows.push(row.into_any_element());
                 continue;
             }

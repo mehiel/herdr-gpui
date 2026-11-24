@@ -3,7 +3,7 @@
 -- (its workspace, tab and pane) over the agent itself, and its status's word
 -- when its integration shows one. Orca and Minimal keep each agent to one
 -- line. Rows are their lines, sized by their text; the order is Sheprd's
--- sort (`app.sheprd.agent_sort`), the highlight the focused pane's, a pencil
+-- sort (`app.sheprd.agent_sort`), the highlight the pane the window is in, a pencil
 -- at the end while its chat holds a draft not sent, a dot while the agent has
 -- a reply no one read, and a click shows that pane.
 local row = use "sheprd-row"

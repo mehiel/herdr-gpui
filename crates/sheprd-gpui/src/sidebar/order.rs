@@ -70,6 +70,15 @@ impl SheprdWindow {
             .collect()
     }
 
+    /// Whether `agent`, listed for the host at `index`, is the pane this
+    /// window is in: the selected host's focused agent. Every daemon
+    /// reports the pane last focused on it, so with several hosts listed
+    /// each has one; only the selected host's is where the window is, and
+    /// every list marks that one alone.
+    pub(crate) fn agent_in_use(&self, index: usize, agent: &Listed<'_>) -> bool {
+        index == self.selected_endpoint && agent.focused()
+    }
+
     /// The agents the panel paints, by host index, in its order: every
     /// listed host's Herdr 1 and Herdr 2 agents.
     /// Painting and stepping both read it, so a shortcut lands on the row

@@ -7,6 +7,7 @@ mod edge;
 mod focus;
 mod icons;
 mod nest;
+mod selection;
 mod sidebar_size;
 mod unread;
 

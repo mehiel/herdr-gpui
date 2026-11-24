@@ -154,11 +154,12 @@ fn panel_id(panel: ActivityPanel) -> &'static str {
 /// An agent as the window's agents list labels it: the place it runs (its
 /// workspace, and its tab when that earns a place), its pane's name, the
 /// word its integration chose for its status, whether it has a reply no
-/// one read (`crate::agent_read`), and whether its chat holds a draft not
-/// sent (`crate::chat::drafts`).
+/// one read (`crate::agent_read`), whether its chat holds a draft not
+/// sent (`crate::chat::drafts`), and whether it is the pane the window is in
+/// (`SheprdWindow::agent_in_use`), not merely its host's last focused one.
 fn agent_state(
     agent: &Listed<'_>,
-    show_state: bool,
+    (show_state, focused): (bool, bool),
     (unread, drafted): (bool, bool),
     (endpoint, host): (&str, Option<&str>),
 ) -> Value {
@@ -172,7 +173,7 @@ fn agent_state(
         "core": agent.is_core(),
         "drafted": drafted,
         "endpoint": endpoint,
-        "focused": agent.focused(),
+        "focused": focused,
         "host": host,
         "kind": agent.identity(),
         "name": agent.name(),
@@ -327,7 +328,7 @@ impl SheprdWindow {
                 let drafted = self.drafted(index, &agent);
                 Some(agent_state(
                     &agent,
-                    shows,
+                    (shows, self.agent_in_use(index, &agent)),
                     (unread, drafted),
                     (&endpoint.id, host),
                 ))
