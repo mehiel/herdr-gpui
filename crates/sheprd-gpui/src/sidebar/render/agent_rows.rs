@@ -110,7 +110,7 @@ impl SheprdWindow {
                 None => {}
             }
             count += favorites.take_marks();
-            if selected && agent.focused() {
+            if self.agent_in_use(index, &agent) {
                 focused = Some(count);
             }
             let gap = self.agent_row_gap(count);
@@ -203,7 +203,7 @@ impl SheprdWindow {
         } else {
             spoken
         };
-        let focused = selected && agent.focused();
+        let focused = self.agent_in_use(index, &agent);
         let star = self.agent_star(index, &agent, cx);
         let unread = self.unread_dot(index, &agent, cx);
         let draft = self.draft_pencil(index, &agent, unread.is_some());

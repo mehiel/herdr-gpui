@@ -41,7 +41,7 @@ impl SheprdWindow {
             .then(|| {
                 self.panel_agents()
                     .into_iter()
-                    .find(|(index, agent)| *index == self.selected_endpoint && agent.focused())
+                    .find(|(index, agent)| self.agent_in_use(*index, agent))
                     .and_then(|(index, agent)| self.read_agent(index, &agent))
             })
             .flatten();

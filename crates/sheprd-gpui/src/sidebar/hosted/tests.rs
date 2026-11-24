@@ -10,6 +10,7 @@ mod focus;
 mod host_colors;
 mod icons;
 mod nest;
+mod selection;
 mod sidebar_size;
 mod status_buttons;
 mod unread;

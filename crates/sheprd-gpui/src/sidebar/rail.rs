@@ -419,14 +419,13 @@ impl SheprdWindow {
             if multi && endpoint.collapsed {
                 continue;
             }
-            let selected = index == self.selected_endpoint;
             let endpoint_id = &endpoint.id;
             let host = multi.then_some(endpoint.label.as_str());
             let id = agent.id();
             let key = format!("rail-agent-{endpoint_id}-{id}");
             let navigate_endpoint = endpoint_id.clone();
             let target = agent.target();
-            let focused = selected && agent.focused();
+            let focused = self.agent_in_use(index, &agent);
             let place = agent.place();
             let place = place.map(|(workspace, tab)| match tab {
                 Some(tab) => format!("{workspace} / {tab}"),

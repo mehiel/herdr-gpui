@@ -98,7 +98,7 @@ impl SheprdWindow {
             let Some(lines) = self.configured_agent_lines(&agent, row_cx.host) else {
                 continue;
             };
-            if selected && agent.focused() {
+            if self.agent_in_use(index, &agent) {
                 focused = Some(count);
             }
             let gap = self.agent_row_gap(count);
